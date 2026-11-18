@@ -114,7 +114,7 @@ async function startCam(){
     stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:320},height:{ideal:240},facingMode:"user"},audio:false});
     video.srcObject=stream; await video.play(); camOn=true; prevL=null; start.classList.remove("on");
     if(!pose.on&&!pose.loading){pose.loading=true;pose.init()}
-    say("손끝 추적 준비 중…\n[V] 웹캠 표현  [C] 카메라  [D] 모션 보기  [ / ] 감도  [F] 전체화면");
+    say("손끝 추적 준비 중…\n[V] 웹캠 표현  [M] 소리  [C] 카메라  [D] 모션 보기  [ / ] 감도  [F] 전체화면");
   }catch(e){
     camOn=false;
     say("카메라를 쓸 수 없습니다 — 화면을 클릭하면 다시 시도합니다",0);
@@ -218,8 +218,58 @@ addEventListener("keydown",e=>{
   else if(k==="]"){sens=Math.min(3,sens*1.2);say("감도 "+sens.toFixed(2),1500)}
   else if(k==="["){sens=Math.max(.3,sens/1.2);say("감도 "+sens.toFixed(2),1500)}
   else if(k==="h")status.classList.toggle("hide");
+  else if(k==="m")snd.toggle();
   else if(k==="v"){vm=(vm+1)%3;say("웹캠 표현: "+["끔","손끝만","전신 옅게 + 손끝"][vm],1800)}
 });
+
+/* ---------- sound: synthesized underwater bubbles (no audio files) ---------- */
+const snd={ac:null,bus:null,muted:false,acc:0,idle:0,
+  start(){
+    if(this.ac){if(this.ac.state!=="running")this.ac.resume();return}
+    const AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
+    const ac=this.ac=new AC();
+    // master → soft lowpass → short watery echo
+    const out=ac.createGain(); out.gain.value=this.muted?0:0.9; out.connect(ac.destination); this.out=out;
+    const lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=3200; lp.connect(out);
+    const dl=ac.createDelay(); dl.delayTime.value=0.09; const fb=ac.createGain(); fb.gain.value=0.28;
+    const wet=ac.createGain(); wet.gain.value=0.35; dl.connect(fb); fb.connect(dl); dl.connect(wet); wet.connect(lp);
+    const bus=this.bus=ac.createGain(); bus.connect(lp); bus.connect(dl);
+    // faint underwater room tone: brown noise through a slowly breathing lowpass
+    const n=ac.sampleRate*4,buf=ac.createBuffer(1,n,ac.sampleRate),d=buf.getChannelData(0); let b=0;
+    for(let i=0;i<n;i++){b=(b+0.02*(Math.random()*2-1))/1.02;d[i]=b*3.2}
+    const src=ac.createBufferSource(); src.buffer=buf; src.loop=true;
+    const nf=ac.createBiquadFilter(); nf.type="lowpass"; nf.frequency.value=320; nf.Q.value=0.7;
+    const lfo=ac.createOscillator(),lg=ac.createGain(); lfo.frequency.value=0.07; lg.gain.value=120; lfo.connect(lg); lg.connect(nf.frequency); lfo.start();
+    const ng=ac.createGain(); ng.gain.value=0.05; src.connect(nf); nf.connect(ng); ng.connect(out); src.start();
+  },
+  bubble(pan=0,size=Math.random()){
+    const ac=this.ac; if(!ac||ac.state!=="running")return;
+    const t=ac.currentTime+Math.random()*0.02;
+    const f0=260+(1-size)*900+Math.random()*120, dur=0.05+size*0.11;
+    const o=ac.createOscillator(); o.type="sine";
+    o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(f0*(2.4+Math.random()*1.2),t+dur);
+    const g=ac.createGain(); const peak=0.05+size*0.09;
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(peak,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    let node=g; if(ac.createStereoPanner){const p=ac.createStereoPanner(); p.pan.value=Math.max(-1,Math.min(1,pan)); g.connect(p); node=p}
+    o.connect(g); node.connect(this.bus); o.start(t); o.stop(t+dur+0.02);
+  },
+  // called every frame with the fingertips: faster gestures → denser bubbling
+  tick(dt){
+    if(!this.ac||this.muted)return;
+    let energy=0,sx=0;
+    for(const A of agents){const e=Math.max(0,A.s-0.15);energy+=e;sx+=e*A.x}
+    const pan=energy>0?(sx/energy/W)*2-1:0;
+    this.acc+=Math.min(45,energy*14)*dt;
+    while(this.acc>=1){this.acc-=1; const burst=Math.random()<.25?2+(Math.random()*3|0):1;
+      for(let i=0;i<burst;i++)this.bubble(pan+(Math.random()-.5)*.4,Math.random()*Math.min(1,.35+energy*.2))}
+    // the odd lazy bubble even when nobody is there
+    this.idle-=dt; if(this.idle<=0){this.idle=1.5+Math.random()*4; this.bubble(Math.random()*2-1,.6+Math.random()*.4)}
+  },
+  toggle(){this.muted=!this.muted; if(this.out)this.out.gain.setTargetAtTime(this.muted?0:0.9,this.ac.currentTime,.05); say(this.muted?"소리 끔":"소리 켬",1200)}
+};
+// browsers only allow sound after a gesture: any click or key starts it (kiosk Chrome can skip this, see README)
+["pointerdown","keydown"].forEach(ev=>addEventListener(ev,()=>snd.start()));
+snd.start();
 
 /* ---------- simulation ---------- */
 let last=performance.now(),T=0;
@@ -240,6 +290,7 @@ function step(now){
     lastPtr={x:ptr.x,y:ptr.y};
   }
   if(pose.on&&camOn)pose.update(now,dt);
+  snd.tick(dt);
   { const rd=Math.exp(-dt*2.5); for(let i=0;i<GN;i++)RV[i]*=rd;
     for(const A of agents)splat(A.x,A.y,Math.max(.9,A.r/W*GW*1.1),Math.max(.45,Math.min(A.s,1.5))*dt*6,RV) }
   for(let i=0;i<GN;i++)if(F[i]>3)F[i]=3;

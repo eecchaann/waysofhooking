@@ -5,7 +5,8 @@
 https://eecchaann.github.io/waysofhooking/
 
 - 손끝 추적: MediaPipe Hands (엄지·검지·중지·약지·새끼 끝) — 각 지점이 마우스 커서처럼 작동
-- F 전체화면 · V 웹캠 표현(끔/손끝만/전신 옅게) · C 카메라 · [ ] 감도 · D 추적 지점 보기 · H 안내 숨기기
+- 소리: 손짓이 빠를수록 보글보글 물방울 소리가 많아짐 (Web Audio로 실시간 합성)
+- F 전체화면 · M 소리 · V 웹캠 표현(끔/손끝만/전신 옅게) · C 카메라 · [ ] 감도 · D 추적 지점 보기 · H 안내 숨기기
 
 ## 전시 모드
 
@@ -13,6 +14,8 @@ https://eecchaann.github.io/waysofhooking/#kiosk — 여백·안내 문구 없�
 
 맥에서 Chrome 키오스크로 바로 띄우기 (터미널):
 
-    open -na "Google Chrome" --args --kiosk "https://eecchaann.github.io/waysofhooking/#kiosk"
+    open -na "Google Chrome" --args --kiosk --autoplay-policy=no-user-gesture-required "https://eecchaann.github.io/waysofhooking/#kiosk"
+
+(이 방식으로 열면 클릭 없이 소리가 바로 나옵니다. 일반 창에서는 화면을 한 번 클릭해야 소리가 켜집니다.)
 
 종료: Cmd+Q
