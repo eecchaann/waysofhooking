@@ -21,7 +21,7 @@
   video{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none}
   /* exhibition mode (#kiosk): poster only, paper-white edges, no UI, no cursor */
   body.kiosk{background:#fff}
-  body.kiosk #status{display:none}
+  body.kiosk #status:not(.err){display:none}  /* only problems show on the exhibition screen */
   body.kiosk.idle,body.kiosk.idle *{cursor:none}
 </style>
 </head>
@@ -108,19 +108,19 @@ let vm=1;   // 0 off · 1 hands only · 2 faint body + hands
 const TW=200,TH=283,tc=document.createElement("canvas");tc.width=TW;tc.height=TH;
 const tctx=tc.getContext("2d",{willReadFrequently:true});
 let hideT=0;
-function say(t,ms=4000){status.textContent=t;status.classList.remove("hide");clearTimeout(hideT);if(ms)hideT=setTimeout(()=>status.classList.add("hide"),ms)}
+function say(t,ms=4000){status.textContent=t;status.classList.toggle("err",!ms);status.classList.remove("hide");clearTimeout(hideT);if(ms)hideT=setTimeout(()=>status.classList.add("hide"),ms)}
 async function startCam(){
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:320},height:{ideal:240},facingMode:"user"},audio:false});
     video.srcObject=stream; await video.play(); camOn=true; prevL=null; start.classList.remove("on");
     if(!pose.on&&!pose.loading){pose.loading=true;pose.init()}
-    say("카메라 반응 중 — 움직이면 물고기가 흩어집니다\n[V] 웹캠 표현  [C] 카메라  [D] 모션 보기  [ / ] 감도  [F] 전체화면");
+    say("손끝 추적 준비 중…\n[V] 웹캠 표현  [C] 카메라  [D] 모션 보기  [ / ] 감도  [F] 전체화면");
   }catch(e){
     camOn=false;
-    say("카메라를 쓸 수 없어 마우스·터치로 반응합니다\n화면을 클릭하면 카메라를 다시 시도합니다",7000);
+    say("카메라를 쓸 수 없습니다 — 화면을 클릭하면 다시 시도합니다",0);
   }
 }
-function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;camOn=false;say("카메라 끔 — 마우스·터치 모드")}
+function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;camOn=false;say("카메라 끔")}
 function readCam(){
   if(!camOn||video.readyState<2)return;
   const vw=video.videoWidth,vh=video.videoHeight; if(!vw)return;
@@ -134,7 +134,7 @@ function readCam(){
   for(let i=0;i<GN;i++)L[i]=d[i*4]*.299+d[i*4+1]*.587+d[i*4+2]*.114;
   if(prevL){
     const th=14/sens;
-    const g=(pose.on?0:0.55)*sens;   // joints take over when a body is tracked; diff stays as a soft ripple
+    const g=0;   // fingertips only: body/frame motion never moves fish   // joints take over when a body is tracked; diff stays as a soft ripple
     for(let i=0;i<GN;i++){const df=Math.abs(L[i]-prevL[i])-th; if(df>0)F[i]+=Math.min(df/55,1.4)*g}
   }
   prevL=L;
@@ -158,7 +158,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
       try{this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("GPU"))}
       catch(e){this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("CPU"))}
       this.on=true; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
-    }catch(e){console.warn("pose unavailable",e); say("손 추적을 불러오지 못해 화면 움직임 감지로 반응합니다",5000)}
+    }catch(e){console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
   },
   update(now,dt){
     if(video.readyState<2||video.currentTime===this.lastVT){this.emit(dt,false);return}
@@ -232,7 +232,7 @@ function step(now){
   readCam();
   // precise point "hands": the pointer and every tracked body joint
   agents.length=0;
-  if(ptr&&now-ptr.t<4000){
+  if(false&&ptr&&now-ptr.t<4000){   // mouse/touch disabled: fingertips only
     let pvx=0,pvy=0; if(lastPtr){pvx=(ptr.x-lastPtr.x)/Math.max(dt,1e-3);pvy=(ptr.y-lastPtr.y)/Math.max(dt,1e-3)}
     ptrV.x+=(pvx-ptrV.x)*.5; ptrV.y+=(pvy-ptrV.y)*.5;
     const sp=Math.hypot(ptrV.x,ptrV.y);
@@ -310,7 +310,7 @@ function step(now){
     tctx.setTransform(-1,0,0,1,TW,0);
     tctx.drawImage(video,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,TW,TH);
     const img=tctx.getImageData(0,0,TW,TH),p=img.data;
-    const base=vm===2?0.12:0, rev=0.38, useF=!pose.on;
+    const base=vm===2?0.12:0, rev=0.38, useF=false;
     for(let y=0;y<TH;y++){
       const fy=(y+.5)/TH*GH-.5, y0=Math.max(0,Math.min(GH-1,fy|0)), y1=Math.min(GH-1,y0+1), ty=Math.max(0,Math.min(1,fy-y0));
       for(let x=0;x<TW;x++){
@@ -352,7 +352,7 @@ function step(now){
 requestAnimationFrame(step);
 
 if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)startCam();
-else say("이 브라우저는 카메라를 지원하지 않아 마우스·터치로 반응합니다",7000);
+else say("이 브라우저는 카메라를 지원하지 않습니다",0);
 })();
 </script>
 </body>

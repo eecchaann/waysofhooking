@@ -1,6 +1,6 @@
 # 낚시의 기술 — Interactive Poster (B)
 
-웹캠으로 손을 추적해, 손짓에 따라 물고기 떼가 흩어지고 다시 글자로 모이는 B판형 인터랙티브 포스터.
+웹캠으로 손끝만 추적해, 손짓에 따라 물고기 떼가 흩어지고 다시 글자로 모이는 B판형 인터랙티브 포스터.
 
 https://eecchaann.github.io/waysofhooking/
 
