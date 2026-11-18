@@ -137,21 +137,21 @@ function readCam(){
 /* ---------- body tracking (MediaPipe Pose) → precise joint "cursors" ---------- */
 const agents=[];
 const MP="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-const MODEL="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 // landmark index → [radius (poster units), resting presence]
-// hands only: wrist, pinky, index, thumb (both sides)
-const JOINTS={15:[8,.10],16:[8,.10],17:[6,.12],18:[6,.12],19:[6,.14],20:[6,.14],21:[5,.10],22:[5,.10]};
+// fingertips only (MediaPipe Hands): thumb, index, middle, ring, pinky → [radius, resting presence]
+const JOINTS={4:[4.5,.10],8:[5.5,.14],12:[4.5,.10],16:[4,.08],20:[4,.08]};
 const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
   async init(){
     try{
       if(typeof window.dbg!=="function")window.dbg=()=>{};   // MediaPipe 0.10.14 wasm calls a global dbg()
       const vis=await import(MP+"/vision_bundle.mjs");
       const fs=await vis.FilesetResolver.forVisionTasks(MP+"/wasm");
-      const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numPoses:3,
-        minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5});
-      try{this.lm=await vis.PoseLandmarker.createFromOptions(fs,opts("GPU"))}
-      catch(e){this.lm=await vis.PoseLandmarker.createFromOptions(fs,opts("CPU"))}
-      this.on=true; say("손 추적 켜짐 — 손짓에만 반응합니다",3500);
+      const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numHands:4,
+        minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});
+      try{this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("GPU"))}
+      catch(e){this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("CPU"))}
+      this.on=true; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
     }catch(e){console.warn("pose unavailable",e); say("손 추적을 불러오지 못해 화면 움직임 감지로 반응합니다",5000)}
   },
   update(now,dt){
@@ -164,7 +164,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
     const seen=new Set(); this.people=res.landmarks.length;
     res.landmarks.forEach((L,pi)=>{
       for(const id in JOINTS){
-        const p=L[id]; if(!p||(p.visibility!==undefined&&p.visibility<.5))continue;
+        const p=L[id]; if(!p)continue;
         const x=(1-(p.x*vw-sx)/sw)*W, y=(p.y*vh-sy)/sh*H;   // mirrored, same crop as the image
         const key=pi+":"+id; seen.add(key);
         let s=this.st.get(key);
@@ -183,7 +183,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
     for(const s of this.st.values()){
       if(!fresh){s.x+=s.vx*dt;s.y+=s.vy*dt;s.vx*=.9;s.vy*=.9}   // glide between camera frames
       const [r,base]=JOINTS[s.id]; const sp=Math.hypot(s.vx,s.vy);
-      agents.push({x:s.x,y:s.y,vx:s.vx,vy:s.vy,r,s:base+Math.min(Math.max(0,sp-6)/80,1.8)*sens});
+      agents.push({x:s.x,y:s.y,vx:s.vx,vy:s.vy,r,s:base+Math.min(Math.max(0,sp-5)/70,1.8)*sens});
     }
   }
 };
@@ -204,7 +204,7 @@ addEventListener("keydown",e=>{
   else if(k==="]"){sens=Math.min(3,sens*1.2);say("감도 "+sens.toFixed(2),1500)}
   else if(k==="["){sens=Math.max(.3,sens/1.2);say("감도 "+sens.toFixed(2),1500)}
   else if(k==="h")status.classList.toggle("hide");
-  else if(k==="v"){vm=(vm+1)%3;say("웹캠 표현: "+["끔","손만","전신 옅게 + 손"][vm],1800)}
+  else if(k==="v"){vm=(vm+1)%3;say("웹캠 표현: "+["끔","손끝만","전신 옅게 + 손끝"][vm],1800)}
 });
 
 /* ---------- simulation ---------- */
@@ -227,7 +227,7 @@ function step(now){
   }
   if(pose.on&&camOn)pose.update(now,dt);
   { const rd=Math.exp(-dt*2.5); for(let i=0;i<GN;i++)RV[i]*=rd;
-    for(const A of agents)splat(A.x,A.y,A.r/W*GW*.8,Math.max(.45,Math.min(A.s,1.5))*dt*6,RV) }
+    for(const A of agents)splat(A.x,A.y,Math.max(.9,A.r/W*GW*1.1),Math.max(.45,Math.min(A.s,1.5))*dt*6,RV) }
   for(let i=0;i<GN;i++)if(F[i]>3)F[i]=3;
   for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
     let s=0,c=0;
@@ -296,7 +296,7 @@ function step(now){
     tctx.setTransform(-1,0,0,1,TW,0);
     tctx.drawImage(video,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,TW,TH);
     const img=tctx.getImageData(0,0,TW,TH),p=img.data;
-    const base=vm===2?0.2:0, rev=0.6, useF=!pose.on;
+    const base=vm===2?0.12:0, rev=0.38, useF=!pose.on;
     for(let y=0;y<TH;y++){
       const fy=(y+.5)/TH*GH-.5, y0=Math.max(0,Math.min(GH-1,fy|0)), y1=Math.min(GH-1,y0+1), ty=Math.max(0,Math.min(1,fy-y0));
       for(let x=0;x<TW;x++){
@@ -311,7 +311,7 @@ function step(now){
           const f=(a00*(1-tx)+a01*tx)*(1-ty)+(a10*(1-tx)+a11*tx)*ty;
           s+=Math.min(1,f*1.8)*rev;
         }
-        p[i]=32;p[i+1]=174;p[i+2]=229;p[i+3]=Math.min(.62,t*s)*255;
+        p[i]=32;p[i+1]=174;p[i+2]=229;p[i+3]=Math.min(.36,t*s)*255;
       }
     }
     tctx.setTransform(1,0,0,1,0,0);
