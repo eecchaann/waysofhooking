@@ -100,6 +100,10 @@ function splat(ux,uy,r,amt,A=F){            // ux,uy in poster units
 }
 
 /* ---------- camera ---------- */
+// which part of the camera image maps onto the poster. A square slice (not a narrow
+// poster-shaped one) so hands held out to the side still land on the poster.
+const CAM_ASPECT=1.0;
+function camRect(vw,vh){let sw=vh*CAM_ASPECT,sh=vh; if(sw>vw){sw=vw;sh=vw/CAM_ASPECT} return [(vw-sw)/2,(vh-sh)/2,sw,sh]}
 const video=document.getElementById("v"),status=document.getElementById("status"),start=document.getElementById("start");
 const cc=document.createElement("canvas");cc.width=GW;cc.height=GH;
 const cctx=cc.getContext("2d",{willReadFrequently:true});
@@ -111,7 +115,7 @@ let hideT=0;
 function say(t,ms=4000){status.textContent=t;status.classList.toggle("err",!ms);status.classList.remove("hide");clearTimeout(hideT);if(ms)hideT=setTimeout(()=>status.classList.add("hide"),ms)}
 async function startCam(){
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:320},height:{ideal:240},facingMode:"user"},audio:false});
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30},facingMode:"user"},audio:false});
     video.srcObject=stream; await video.play(); camOn=true; prevL=null; start.classList.remove("on");
     if(!pose.on&&!pose.loading){pose.loading=true;pose.init()}
     say("손끝 추적 준비 중…\n[V] 웹캠 표현  [M] 소리  [C] 카메라  [D] 모션 보기  [ / ] 감도  [F] 전체화면");
@@ -125,8 +129,7 @@ function readCam(){
   if(!camOn||video.readyState<2)return;
   const vw=video.videoWidth,vh=video.videoHeight; if(!vw)return;
   // cover-crop video into the poster aspect, mirrored
-  let sw=vh*GW/GH,sh=vh; if(sw>vw){sw=vw;sh=vw*GH/GW}
-  const sx=(vw-sw)/2,sy=(vh-sh)/2;
+  const [sx,sy,sw,sh]=camRect(vw,vh);
   cctx.setTransform(-1,0,0,1,GW,0);
   cctx.drawImage(video,sx,sy,sw,sh,0,0,GW,GH);
   const d=cctx.getImageData(0,0,GW,GH).data;
@@ -146,7 +149,7 @@ const MP="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 // landmark index → [radius (poster units), resting presence]
 // fingertips only (MediaPipe Hands): thumb, index, middle, ring, pinky → [radius, resting presence]
-const JOINTS={4:[4.5,.10],8:[5.5,.14],12:[4.5,.10],16:[4,.08],20:[4,.08]};
+const JOINTS={4:[8,.14],8:[10,.20],12:[8,.14],16:[7,.10],20:[7,.10]};
 const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
   async init(){
     try{
@@ -154,19 +157,19 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
       const vis=await import(MP+"/vision_bundle.mjs");
       const fs=await vis.FilesetResolver.forVisionTasks(MP+"/wasm");
       const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numHands:4,
-        minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});
+        minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});
       try{this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("GPU"))}
       catch(e){this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("CPU"))}
       this.on=true; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
-    }catch(e){console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
+    }catch(e){this.loading=false;this.failed=true;console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
   },
   update(now,dt){
     if(video.readyState<2||video.currentTime===this.lastVT){this.emit(dt,false);return}
     this.lastVT=video.currentTime;
     let res; try{res=this.lm.detectForVideo(video,now)}catch(e){return}
     const vw=video.videoWidth,vh=video.videoHeight;
-    let sw=vh*W/H,sh=vh; if(sw>vw){sw=vw;sh=vw*H/W}
-    const sx=(vw-sw)/2,sy=(vh-sh)/2;
+    const [sx,sy,sw,sh]=camRect(vw,vh);
+    this.raw=res.landmarks; this.lastSeen=res.landmarks.length?now:this.lastSeen;
     const seen=new Set(); this.people=res.landmarks.length;
     res.landmarks.forEach((L,pi)=>{
       for(const id in JOINTS){
@@ -357,9 +360,9 @@ function step(now){
     // viewer printed in the poster's own ink: one blue, posterised like a riso layer.
     // white stays paper-white; a faint plate everywhere, stronger where you move.
     const vw=video.videoWidth,vh=video.videoHeight;
-    let sw=vh*W/H,sh=vh; if(sw>vw){sw=vw;sh=vw*H/W}
+    const [sx,sy,sw,sh]=camRect(vw,vh);
     tctx.setTransform(-1,0,0,1,TW,0);
-    tctx.drawImage(video,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,TW,TH);
+    tctx.drawImage(video,sx,sy,sw,sh,0,0,TW,TH);
     const img=tctx.getImageData(0,0,TW,TH),p=img.data;
     const base=vm===2?0.12:0, rev=0.38, useF=false;
     for(let y=0;y<TH;y++){
@@ -397,6 +400,18 @@ function step(now){
     dctx.putImageData(dimg,0,0);
     ctx.setTransform(1,0,0,1,0,0); ctx.strokeStyle="#e5203a"; ctx.lineWidth=1.5*dpr;
     for(const A of agents){ctx.beginPath();ctx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);ctx.stroke()}
+    // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
+    if(camOn&&video.videoWidth){
+      const vw=video.videoWidth,vh=video.videoHeight,tw=cv.width*.42,th=tw*vh/vw,ox=cv.width-tw-10*dpr,oy=10*dpr;
+      ctx.save();ctx.translate(ox+tw,oy);ctx.scale(-1,1);ctx.globalAlpha=.85;ctx.drawImage(video,0,0,tw,th);ctx.globalAlpha=1;
+      const [sx,sy,sw,sh]=camRect(vw,vh),k=tw/vw;
+      ctx.strokeStyle="#20aee5";ctx.lineWidth=2*dpr;ctx.strokeRect(sx*k,sy*k,sw*k,sh*k);
+      ctx.fillStyle="#e5203a";
+      for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;ctx.beginPath();ctx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);ctx.fill()}
+      ctx.restore();
+      ctx.fillStyle="#000";ctx.font=(13*dpr)+"px system-ui";
+      ctx.fillText(`카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox,oy+th+18*dpr);
+    }
   }
   requestAnimationFrame(step);
 }
