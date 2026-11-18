@@ -19,6 +19,10 @@
     background:rgba(14,14,14,.55);color:#fff;font-size:14px;cursor:pointer;letter-spacing:.04em}
   #start.on{display:flex}
   video{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none}
+  /* exhibition mode (#kiosk): poster only, paper-white edges, no UI, no cursor */
+  body.kiosk{background:#fff}
+  body.kiosk #status{display:none}
+  body.kiosk.idle,body.kiosk.idle *{cursor:none}
 </style>
 </head>
 <body>
@@ -65,12 +69,14 @@ function makeSprite(ppu){
 }
 
 /* ---------- layout ---------- */
+const KIOSK=/kiosk/i.test(location.hash+location.search);
+if(KIOSK)document.body.classList.add("kiosk");
 const poster=document.getElementById("poster"),cv=document.getElementById("c"),ctx=cv.getContext("2d");
 const dbg=document.getElementById("dbg"),dctx=dbg.getContext("2d");
 let ppu=1,dpr=1;
 function layout(){
   dpr=Math.min(window.devicePixelRatio||1,2);
-  const vw=innerWidth,vh=innerHeight,m=Math.min(vw,vh)*0.03;
+  const vw=innerWidth,vh=innerHeight,m=KIOSK?0:Math.min(vw,vh)*0.03;
   let h=vh-m*2,w=h/Math.SQRT2;
   if(w>vw-m*2){w=vw-m*2;h=w*Math.SQRT2}
   poster.style.width=w+"px"; poster.style.height=h+"px";
@@ -196,6 +202,14 @@ addEventListener("pointerdown",e=>{ptr=toPoster(e);ptr.t=performance.now();ptr.d
 addEventListener("pointerup",()=>{if(ptr)ptr.down=false});
 addEventListener("pointerleave",()=>{ptr=null;lastPtr=null;ptrV.x=ptrV.y=0});
 
+// exhibition helpers: double-click = fullscreen, hide idle cursor, keep the screen awake
+addEventListener("dblclick",()=>{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{})});
+if(KIOSK){
+  let idleT=0; const wake=()=>{document.body.classList.remove("idle");clearTimeout(idleT);idleT=setTimeout(()=>document.body.classList.add("idle"),2000)};
+  addEventListener("pointermove",wake); wake();
+  let lock=null; const keepAwake=async()=>{try{if(!lock&&document.visibilityState==="visible"){lock=await navigator.wakeLock.request("screen");lock.addEventListener("release",()=>lock=null)}}catch(e){}};
+  keepAwake(); document.addEventListener("visibilitychange",keepAwake); addEventListener("pointerdown",keepAwake);
+}
 addEventListener("keydown",e=>{
   const k=e.key.toLowerCase();
   if(k==="d")dbg.classList.toggle("on");
