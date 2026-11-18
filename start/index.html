@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>전시 시작 — 낚시의 기술</title>
+<style>
+  body{margin:0;background:#000;color:#eee;font:16px/1.6 "Apple SD Gothic Neo",system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
+  main{max-width:640px;padding:32px}
+  h1{font-size:28px;margin:0 0 24px;color:#20aee5}
+  ol{padding-left:1.2em}li{margin:.4em 0}
+  button{font:inherit;font-size:18px;padding:14px 22px;border:0;border-radius:8px;background:#20aee5;color:#000;cursor:pointer;margin:8px 0}
+  code{display:block;background:#111;padding:12px;border-radius:6px;font-size:12px;word-break:break-all;color:#aaa;margin-top:8px}
+  #ok{color:#20aee5;margin-left:10px}
+  a{color:#20aee5}
+</style></head>
+<body><main>
+<h1>낚시의 기술 — 전시 시작</h1>
+<p><b>간단한 방법 (터미널 없이)</b></p>
+<ol>
+  <li>Chrome에서 <a href="../show/">eecchaann.github.io/waysofhooking/show</a> 열기</li>
+  <li>카메라 권한 허용 (처음 한 번만)</li>
+  <li>화면을 더블클릭 → 전체화면 + 소리 켜짐</li>
+</ol>
+<p style="margin-top:28px"><b>완전 자동 (메뉴바 없이, 클릭 없이 소리)</b></p>
+<ol>
+  <li>아래 버튼을 눌러 명령어 복사</li>
+  <li>Spotlight(⌘+Space)에서 "터미널" 열기 → ⌘+V → Enter</li>
+  <li>끌 때는 ⌘+Q</li>
+</ol>
+<button id="b">명령어 복사</button><span id="ok"></span>
+<code id="c">open -na "Google Chrome" --args --kiosk --autoplay-policy=no-user-gesture-required "https://eecchaann.github.io/waysofhooking/#kiosk"</code>
+</main>
+<script>
+document.getElementById("b").onclick=async()=>{
+  const t=document.getElementById("c").textContent;
+  try{await navigator.clipboard.writeText(t)}catch(e){const r=document.createRange();r.selectNode(document.getElementById("c"));getSelection().removeAllRanges();getSelection().addRange(r);document.execCommand("copy")}
+  document.getElementById("ok").textContent="복사됨 ✓";
+};
+</script>
+</body></html>
