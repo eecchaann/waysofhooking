@@ -177,7 +177,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
         const x=(1-(p.x*vw-sx)/sw)*W, y=(p.y*vh-sy)/sh*H;   // mirrored, same crop as the image
         const key=pi+":"+id; seen.add(key);
         let s=this.st.get(key);
-        if(!s){s={x,y,vx:0,vy:0,t:now};this.st.set(key,s);continue}
+        if(!s){s={x,y,vx:0,vy:0,t:now,id:+id};this.st.set(key,s);continue}
         const ddt=Math.max(.016,(now-s.t)/1000);
         // light smoothing: keeps fingertips sharp, removes jitter
         const nx=s.x+(x-s.x)*.65, ny=s.y+(y-s.y)*.65;
@@ -191,7 +191,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
   emit(dt,fresh){
     for(const s of this.st.values()){
       if(!fresh){s.x+=s.vx*dt;s.y+=s.vy*dt;s.vx*=.9;s.vy*=.9}   // glide between camera frames
-      const [r,base]=JOINTS[s.id]; const sp=Math.hypot(s.vx,s.vy);
+      const J=JOINTS[s.id]; if(!J)continue; const [r,base]=J; const sp=Math.hypot(s.vx,s.vy);
       agents.push({x:s.x,y:s.y,vx:s.vx,vy:s.vy,r,s:base+Math.min(Math.max(0,sp-5)/70,1.8)*sens});
     }
   }
@@ -277,6 +277,10 @@ snd.start();
 /* ---------- simulation ---------- */
 let last=performance.now(),T=0;
 function step(now){
+  try{ stepInner(now) }catch(e){ console.error(e) }
+  requestAnimationFrame(step);
+}
+function stepInner(now){
   let dt=Math.min(.05,(now-last)/1000); last=now; T+=dt;
 
   // field: decay, sources, blur, gradient
@@ -413,7 +417,6 @@ function step(now){
       ctx.fillText(`카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox,oy+th+18*dpr);
     }
   }
-  requestAnimationFrame(step);
 }
 requestAnimationFrame(step);
 
