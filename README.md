@@ -4,6 +4,7 @@
 
 https://eecchaann.github.io/waysofhooking/
 
+- 구형 맥: 자동 저사양 모드, 손 추적 GPU/CPU 자동 전환 (강제: 주소 뒤 ?cpu, ?low)
 - 손끝 추적: MediaPipe Hands (엄지·검지·중지·약지·새끼 끝) — 각 지점이 마우스 커서처럼 작동
 - 소리: 손짓이 빠를수록 보글보글 물방울 소리가 많아짐 (Web Audio로 실시간 합성)
 - F 전체화면 · M 소리 · V 웹캠 표현(끔/손끝만/전신 옅게) · C 카메라 · [ ] 감도 · D 추적 지점 보기 · H 안내 숨기기

@@ -73,9 +73,9 @@ const KIOSK=/kiosk/i.test(location.hash+location.search);
 if(KIOSK)document.body.classList.add("kiosk");
 const poster=document.getElementById("poster"),cv=document.getElementById("c"),ctx=cv.getContext("2d");
 const dbg=document.getElementById("dbg"),dctx=dbg.getContext("2d");
-let ppu=1,dpr=1;
+let ppu=1,dpr=1,maxDpr=/low/i.test(location.search+location.hash)?1:2;
 function layout(){
-  dpr=Math.min(window.devicePixelRatio||1,2);
+  dpr=Math.min(window.devicePixelRatio||1,maxDpr);
   const vw=innerWidth,vh=innerHeight,m=KIOSK?0:Math.min(vw,vh)*0.03;
   let h=vh-m*2,w=h/Math.SQRT2;
   if(w>vw-m*2){w=vw-m*2;h=w*Math.SQRT2}
@@ -150,23 +150,41 @@ const MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/han
 // landmark index → [radius (poster units), resting presence]
 // fingertips only (MediaPipe Hands): thumb, index, middle, ring, pinky → [radius, resting presence]
 const JOINTS={4:[8,.14],8:[10,.20],12:[8,.14],16:[7,.10],20:[7,.10]};
-const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
+// small copy of the camera frame for detection: much lighter on old machines
+const DET_W=640, dc=document.createElement("canvas"), dctx2=dc.getContext("2d");
+const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),vis:null,fs:null,
+  delegate:/cpu/i.test(location.search+location.hash)?"CPU":"GPU",
+  ms:0,errs:0,lastDet:0,everSeen:false,since:0,switching:false,
+  async make(d){
+    const lm=await this.vis.HandLandmarker.createFromOptions(this.fs,{baseOptions:{modelAssetPath:MODEL,delegate:d},
+      runningMode:"VIDEO",numHands:4,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});
+    if(this.lm)try{this.lm.close()}catch(e){}
+    this.lm=lm; this.delegate=d; this.errs=0; this.since=performance.now();
+  },
   async init(){
     try{
       if(typeof window.dbg!=="function")window.dbg=()=>{};   // MediaPipe 0.10.14 wasm calls a global dbg()
-      const vis=await import(MP+"/vision_bundle.mjs");
-      const fs=await vis.FilesetResolver.forVisionTasks(MP+"/wasm");
-      const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numHands:4,
-        minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});
-      try{this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("GPU"))}
-      catch(e){this.lm=await vis.HandLandmarker.createFromOptions(fs,opts("CPU"))}
+      this.vis=await import(MP+"/vision_bundle.mjs");
+      this.fs=await this.vis.FilesetResolver.forVisionTasks(MP+"/wasm");
+      try{await this.make(this.delegate)}catch(e){await this.make(this.delegate==="GPU"?"CPU":"GPU")}
       this.on=true; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
     }catch(e){this.loading=false;this.failed=true;console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
   },
+  // old GPUs (e.g. 2017 Intel Macs) can fail silently: if detection keeps erroring, or finds
+  // nothing for a long stretch before ever seeing a hand, try the other delegate.
+  async swap(){ if(this.switching)return; this.switching=true;
+    try{await this.make(this.delegate==="GPU"?"CPU":"GPU")}catch(e){} this.switching=false },
   update(now,dt){
-    if(video.readyState<2||video.currentTime===this.lastVT){this.emit(dt,false);return}
-    this.lastVT=video.currentTime;
-    let res; try{res=this.lm.detectForVideo(video,now)}catch(e){return}
+    if(this.switching||video.readyState<2||video.currentTime===this.lastVT||now-this.lastDet<45){this.emit(dt,false);return}
+    this.lastVT=video.currentTime; this.lastDet=now;
+    const vw0=video.videoWidth,vh0=video.videoHeight;
+    if(dc.width!==DET_W){dc.width=DET_W;dc.height=Math.round(DET_W*vh0/vw0)}
+    dctx2.drawImage(video,0,0,dc.width,dc.height);
+    let res; const t0=performance.now();
+    try{res=this.lm.detectForVideo(dc,now)}catch(e){ if(++this.errs>8)this.swap(); return }
+    this.ms+=(performance.now()-t0-this.ms)*.2;
+    if(res.landmarks.length)this.everSeen=true;
+    else if(!this.everSeen&&now-this.since>15000)this.swap();
     const vw=video.videoWidth,vh=video.videoHeight;
     const [sx,sy,sw,sh]=camRect(vw,vh);
     this.raw=res.landmarks; this.lastSeen=res.landmarks.length?now:this.lastSeen;
@@ -280,8 +298,12 @@ function step(now){
   try{ stepInner(now) }catch(e){ console.error(e) }
   requestAnimationFrame(step);
 }
+let fps=60,slowT=0,lowQ=false;
 function stepInner(now){
   let dt=Math.min(.05,(now-last)/1000); last=now; T+=dt;
+  if(dt>0)fps+=(1/dt-fps)*.05;
+  // drop render resolution once if the machine can't keep up (old Macs, 4K screens)
+  if(!lowQ&&fps<26){slowT+=dt; if(slowT>2.5){lowQ=true; maxDpr=1; layout(); say("저사양 모드로 전환",1500)}} else slowT=0;
 
   // field: decay, sources, blur, gradient
   const dec=Math.exp(-dt*3.2);
@@ -405,7 +427,7 @@ function stepInner(now){
     ctx.setTransform(1,0,0,1,0,0); ctx.strokeStyle="#e5203a"; ctx.lineWidth=1.5*dpr;
     for(const A of agents){ctx.beginPath();ctx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);ctx.stroke()}
     // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
-    if(!camOn){ctx.fillStyle="#000";ctx.font=(13*dpr)+"px system-ui";ctx.fillText("v1118-1810 · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
+    if(!camOn){ctx.fillStyle="#000";ctx.font=(13*dpr)+"px system-ui";ctx.fillText("v1118-1820 · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
     if(camOn&&video.videoWidth){
       const vw=video.videoWidth,vh=video.videoHeight,tw=cv.width*.42,th=tw*vh/vw,ox=cv.width-tw-10*dpr,oy=10*dpr;
       ctx.save();ctx.translate(ox+tw,oy);ctx.scale(-1,1);ctx.globalAlpha=.85;ctx.drawImage(video,0,0,tw,th);ctx.globalAlpha=1;
@@ -415,7 +437,7 @@ function stepInner(now){
       for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;ctx.beginPath();ctx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);ctx.fill()}
       ctx.restore();
       ctx.fillStyle="#000";ctx.font=(11*dpr)+"px system-ui";ctx.textAlign="right";
-      ctx.fillText(`v1118-1810 · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);ctx.textAlign="left";
+      ctx.fillText(`v1118-1820 · ${Math.round(fps)}fps · 추적 ${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);ctx.textAlign="left";
     }
   }
 }
