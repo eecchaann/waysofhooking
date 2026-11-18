@@ -413,8 +413,8 @@ function stepInner(now){
       ctx.fillStyle="#e5203a";
       for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;ctx.beginPath();ctx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);ctx.fill()}
       ctx.restore();
-      ctx.fillStyle="#000";ctx.font=(13*dpr)+"px system-ui";
-      ctx.fillText(`카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox,oy+th+18*dpr);
+      ctx.fillStyle="#000";ctx.font=(11*dpr)+"px system-ui";ctx.textAlign="right";
+      ctx.fillText(`카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);ctx.textAlign="left";
     }
   }
 }
