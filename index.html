@@ -144,6 +144,7 @@ const JOINTS={15:[8,.10],16:[8,.10],17:[6,.12],18:[6,.12],19:[6,.14],20:[6,.14],
 const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),
   async init(){
     try{
+      if(typeof window.dbg!=="function")window.dbg=()=>{};   // MediaPipe 0.10.14 wasm calls a global dbg()
       const vis=await import(MP+"/vision_bundle.mjs");
       const fs=await vis.FilesetResolver.forVisionTasks(MP+"/wasm");
       const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numPoses:3,
