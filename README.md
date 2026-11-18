@@ -10,7 +10,7 @@ https://eecchaann.github.io/waysofhooking/
 
 ## 전시 모드
 
-https://eecchaann.github.io/waysofhooking/#kiosk — 여백·안내 문구 없이 포스터만, 커서 자동 숨김, 화면 꺼짐 방지. 더블클릭으로 전체화면.
+https://eecchaann.github.io/waysofhooking/#kiosk — 포스터만 (남는 화면은 검정), 커서 자동 숨김, 화면 꺼짐 방지. 더블클릭으로 전체화면.
 
 맥에서 Chrome 키오스크로 바로 띄우기 (터미널):
 
