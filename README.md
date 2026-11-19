@@ -4,6 +4,7 @@
 
 https://eecchaann.github.io/waysofhooking/
 
+- 손 인식: Web Worker에서 실행(화면 멈춤 없음), 실패 시 페이지 안에서 실행 (강제: ?main)
 - 렌더링: WebGL2 인스턴싱(물고기 1만 2천 마리를 한 번에), 미지원 시 2D 자동 전환 (강제: ?2d)
 - 구형 맥: 자동 저사양 모드, 손 추적 GPU/CPU 자동 전환 (강제: 주소 뒤 ?cpu, ?low)
 - 손끝 추적: MediaPipe Hands (엄지·검지·중지·약지·새끼 끝) — 각 지점이 마우스 커서처럼 작동

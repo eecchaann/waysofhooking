@@ -218,44 +218,114 @@ const MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/han
 const JOINTS={4:[8,.14],8:[10,.20],12:[8,.14],16:[7,.10],20:[7,.10]};
 // small copy of the camera frame for detection: much lighter on old machines
 const DET_W=640, dc=document.createElement("canvas"), dctx2=dc.getContext("2d");
+// Hand detection runs in a Web Worker so it never freezes the animation.
+// If a worker can't be used, it falls back to running on the page itself.
+const WORKER_SRC=`
+self.dbg=()=>{};                      // MediaPipe 0.10.14 wasm calls a global dbg()
+let vis=null,fs=null,lm=null,cfg=null,delegate="GPU";
+async function make(d){
+  const n=await vis.HandLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:cfg.model,delegate:d},
+    runningMode:"VIDEO",numHands:4,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});
+  if(lm)try{lm.close()}catch(e){}
+  lm=n; delegate=d;
+}
+onmessage=async e=>{
+  const m=e.data;
+  if(m.type==="init"){
+    cfg=m;
+    try{
+      vis=await import(m.mp+"/vision_bundle.mjs");
+      fs=await vis.FilesetResolver.forVisionTasks(m.mp+"/wasm");
+      try{await make(m.delegate)}catch(err){await make(m.delegate==="GPU"?"CPU":"GPU")}
+      postMessage({type:"ready",delegate});
+    }catch(err){postMessage({type:"fail",msg:String(err)})}
+  }else if(m.type==="swap"){
+    try{await make(delegate==="GPU"?"CPU":"GPU")}catch(err){}
+    postMessage({type:"ready",delegate});
+  }else if(m.type==="frame"){
+    const t0=performance.now();
+    try{const r=lm.detectForVideo(m.bmp,m.ts);postMessage({type:"res",lm:r.landmarks,ms:performance.now()-t0})}
+    catch(err){postMessage({type:"err",msg:String(err)})}
+    try{m.bmp.close()}catch(err){}
+  }
+};`;
 const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),vis:null,fs:null,
   delegate:/cpu/i.test(location.search+location.hash)?"CPU":"GPU",
   ms:0,errs:0,lastDet:0,everSeen:false,since:0,switching:false,
+  worker:null,mode:"",busy:false,fresh:false,
+  init(){
+    if(/main/i.test(location.search+location.hash)||typeof Worker==="undefined"||typeof createImageBitmap==="undefined")return this.initMain();
+    let settled=false;
+    try{
+      const w=this.worker=new Worker(URL.createObjectURL(new Blob([WORKER_SRC],{type:"text/javascript"})));
+      const giveUp=()=>{ if(settled)return; settled=true; try{w.terminate()}catch(e){} this.worker=null; this.initMain() };
+      const timer=setTimeout(giveUp,30000);
+      w.onerror=giveUp;
+      w.onmessage=e=>{
+        const m=e.data;
+        if(m.type==="ready"){
+          clearTimeout(timer); settled=true;
+          this.delegate=m.delegate; this.errs=0; this.since=performance.now(); this.switching=false; this.busy=false;
+          if(!this.on){this.on=true; this.mode="worker"; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500)}
+        }else if(m.type==="fail"){ clearTimeout(timer); console.warn("worker pose failed",m.msg); giveUp() }
+        else if(m.type==="err"){ this.busy=false; if(++this.errs>8)this.swap() }
+        else if(m.type==="res"){ this.busy=false; this.ms+=(m.ms-this.ms)*.2; this.ingest(m.lm,performance.now()) }
+      };
+      w.postMessage({type:"init",mp:MP,model:MODEL,delegate:this.delegate});
+    }catch(e){ if(!settled){settled=true; this.worker=null; this.initMain()} }
+  },
   async make(d){
     const lm=await this.vis.HandLandmarker.createFromOptions(this.fs,{baseOptions:{modelAssetPath:MODEL,delegate:d},
       runningMode:"VIDEO",numHands:4,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});
     if(this.lm)try{this.lm.close()}catch(e){}
     this.lm=lm; this.delegate=d; this.errs=0; this.since=performance.now();
   },
-  async init(){
+  async initMain(){
     try{
       if(typeof window.dbg!=="function")window.dbg=()=>{};   // MediaPipe 0.10.14 wasm calls a global dbg()
       this.vis=await import(MP+"/vision_bundle.mjs");
       this.fs=await this.vis.FilesetResolver.forVisionTasks(MP+"/wasm");
       try{await this.make(this.delegate)}catch(e){await this.make(this.delegate==="GPU"?"CPU":"GPU")}
-      this.on=true; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
+      this.on=true; this.mode="page"; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
     }catch(e){this.loading=false;this.failed=true;console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
   },
   // old GPUs (e.g. 2017 Intel Macs) can fail silently: if detection keeps erroring, or finds
   // nothing for a long stretch before ever seeing a hand, try the other delegate.
-  async swap(){ if(this.switching)return; this.switching=true;
-    try{await this.make(this.delegate==="GPU"?"CPU":"GPU")}catch(e){} this.switching=false },
+  async swap(){
+    if(this.switching)return; this.switching=true;
+    if(this.mode==="worker"){ this.worker.postMessage({type:"swap"}); return }   // "ready" clears switching
+    try{await this.make(this.delegate==="GPU"?"CPU":"GPU")}catch(e){} this.switching=false;
+  },
   update(now,dt){
-    if(this.switching||video.readyState<2||video.currentTime===this.lastVT||now-this.lastDet<Math.max(45,this.ms*2.5)){this.emit(dt,false);return}
-    this.lastVT=video.currentTime; this.lastDet=now;
-    const vw0=video.videoWidth,vh0=video.videoHeight;
-    if(dc.width!==DET_W){dc.width=DET_W;dc.height=Math.round(DET_W*vh0/vw0)}
-    dctx2.drawImage(video,0,0,dc.width,dc.height);
-    let res; const t0=performance.now();
-    try{res=this.lm.detectForVideo(dc,now)}catch(e){ if(++this.errs>8)this.swap(); return }
-    this.ms+=(performance.now()-t0-this.ms)*.2;
-    if(res.landmarks.length)this.everSeen=true;
+    const due=!this.switching&&video.readyState>=2&&video.currentTime!==this.lastVT;
+    if(this.mode==="worker"){
+      if(due&&!this.busy&&now-this.lastDet>=30){
+        this.busy=true; this.lastVT=video.currentTime; this.lastDet=now;
+        const vw0=video.videoWidth,vh0=video.videoHeight;
+        createImageBitmap(video,{resizeWidth:DET_W,resizeHeight:Math.round(DET_W*vh0/vw0),resizeQuality:"low"})
+          .then(bmp=>this.worker.postMessage({type:"frame",bmp,ts:now},[bmp]))
+          .catch(()=>{this.busy=false});
+      }
+    }else if(due&&now-this.lastDet>=Math.max(45,this.ms*2.5)){
+      this.lastVT=video.currentTime; this.lastDet=now;
+      const vw0=video.videoWidth,vh0=video.videoHeight;
+      if(dc.width!==DET_W){dc.width=DET_W;dc.height=Math.round(DET_W*vh0/vw0)}
+      dctx2.drawImage(video,0,0,dc.width,dc.height);
+      const t0=performance.now();
+      try{const res=this.lm.detectForVideo(dc,now); this.ms+=(performance.now()-t0-this.ms)*.2; this.ingest(res.landmarks,now)}
+      catch(e){ if(++this.errs>8)this.swap() }
+    }
+    this.emit(dt,this.fresh); this.fresh=false;
+  },
+  // landmarks (normalised to the whole camera frame) → smoothed fingertip states in poster units
+  ingest(hands,now){
+    if(hands.length)this.everSeen=true;
     else if(!this.everSeen&&now-this.since>15000)this.swap();
-    const vw=video.videoWidth,vh=video.videoHeight;
+    const vw=video.videoWidth,vh=video.videoHeight; if(!vw)return;
     const [sx,sy,sw,sh]=camRect(vw,vh);
-    this.raw=res.landmarks; this.lastSeen=res.landmarks.length?now:this.lastSeen;
-    const seen=new Set(); this.people=res.landmarks.length;
-    res.landmarks.forEach((L,pi)=>{
+    this.raw=hands; this.lastSeen=hands.length?now:this.lastSeen;
+    const seen=new Set(); this.people=hands.length;
+    hands.forEach((L,pi)=>{
       for(const id in JOINTS){
         const p=L[id]; if(!p)continue;
         const x=(1-(p.x*vw-sx)/sw)*W, y=(p.y*vh-sy)/sh*H;   // mirrored, same crop as the image
@@ -266,11 +336,11 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),vis:null,fs:null,
         // light smoothing: keeps fingertips sharp, removes jitter
         const nx=s.x+(x-s.x)*.65, ny=s.y+(y-s.y)*.65;
         s.vx+=((nx-s.x)/ddt-s.vx)*.5; s.vy+=((ny-s.y)/ddt-s.vy)*.5;
-        s.x=nx; s.y=ny; s.t=now; s.id=+id; s.fresh=1;
+        s.x=nx; s.y=ny; s.t=now; s.id=+id;
       }
     });
     for(const k of [...this.st.keys()])if(!seen.has(k))this.st.delete(k);
-    this.emit(dt,true);
+    this.fresh=true;
   },
   emit(dt,fresh){
     for(const s of this.st.values()){
@@ -454,7 +524,7 @@ function stepInner(now){
     octx.setTransform(1,0,0,1,0,0); octx.strokeStyle="#e5203a"; octx.lineWidth=1.5*dpr;
     for(const A of agents){octx.beginPath();octx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);octx.stroke()}
     // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
-    if(!camOn){octx.fillStyle="#000";octx.font=(13*dpr)+"px system-ui";octx.fillText("v1119-gl · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
+    if(!camOn){octx.fillStyle="#000";octx.font=(13*dpr)+"px system-ui";octx.fillText("v1119-gl2 · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
     if(camOn&&video.videoWidth){
       const vw=video.videoWidth,vh=video.videoHeight,tw=ov.width*.42,th=tw*vh/vw,ox=ov.width-tw-10*dpr,oy=10*dpr;
       octx.save();octx.translate(ox+tw,oy);octx.scale(-1,1);octx.globalAlpha=.85;octx.drawImage(video,0,0,tw,th);octx.globalAlpha=1;
@@ -464,7 +534,7 @@ function stepInner(now){
       for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;octx.beginPath();octx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);octx.fill()}
       octx.restore();
       octx.fillStyle="#000";octx.font=(11*dpr)+"px system-ui";octx.textAlign="right";
-      octx.fillText(`v1119-gl · ${gl?"WebGL":"2D"} · ${Math.round(fps)}fps · 추적 ${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);octx.textAlign="left";
+      octx.fillText(`v1119-gl2 · ${gl?"WebGL":"2D"} · ${Math.round(fps)}fps · 추적 ${pose.mode||"-"}/${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);octx.textAlign="left";
     }
   } else if(ovDirty){ octx.clearRect(0,0,ov.width,ov.height); ovDirty=false }
 }
