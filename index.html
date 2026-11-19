@@ -12,6 +12,7 @@
   canvas{display:block;width:100%;height:100%}
   #dbg{position:absolute;inset:0;pointer-events:none;opacity:0;mix-blend-mode:multiply;image-rendering:pixelated}
   #dbg.on{opacity:.35}
+  #ov{position:absolute;inset:0;pointer-events:none}
   #status{position:fixed;left:16px;bottom:14px;color:#9a9a9a;font-size:12px;letter-spacing:.02em;
     line-height:1.6;transition:opacity .8s;pointer-events:none;white-space:pre}
   #status.hide{opacity:0}
@@ -26,7 +27,7 @@
 </style>
 </head>
 <body>
-<div id="stage"><div id="poster"><canvas id="c"></canvas><canvas id="dbg"></canvas></div></div>
+<div id="stage"><div id="poster"><canvas id="c"></canvas><canvas id="dbg"></canvas><canvas id="ov"></canvas></div></div>
 <div id="status"></div>
 <div id="start">클릭해서 카메라 켜기</div>
 <video id="v" playsinline muted></video>
@@ -71,7 +72,70 @@ function makeSprite(ppu){
 /* ---------- layout ---------- */
 const KIOSK=/kiosk/i.test(location.hash+location.search);
 if(KIOSK)document.body.classList.add("kiosk");
-const poster=document.getElementById("poster"),cv=document.getElementById("c"),ctx=cv.getContext("2d");
+const poster=document.getElementById("poster"); let cv=document.getElementById("c");
+const ov=document.getElementById("ov"),octx=ov.getContext("2d");
+/* ---------- GPU renderer: all fish in one instanced draw call ---------- */
+const FORCE2D=/2d/i.test(location.search+location.hash);
+let gl=null;
+try{ if(!FORCE2D)gl=cv.getContext("webgl2",{antialias:false,alpha:false,depth:false,stencil:false,premultipliedAlpha:true,powerPreference:"high-performance"}) }catch(e){gl=null}
+let G=null;
+if(gl){
+  try{
+    const sh=(type,src)=>{const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s};
+    const prog=(vs,fs)=>{const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));return p};
+    const fishP=prog(`#version 300 es
+in vec2 aC; in vec4 aI; uniform vec2 uV; uniform vec4 uS; out vec2 vUV;
+void main(){ vec2 l=(aC*uS.xy-uS.zw)*aI.w; float c=cos(aI.z),s=sin(aI.z);
+  vec2 p=vec2(c*l.x-s*l.y,s*l.x+c*l.y)+aI.xy; vUV=aC;
+  gl_Position=vec4(p.x/uV.x*2.-1.,1.-p.y/uV.y*2.,0.,1.); }`,
+`#version 300 es
+precision mediump float; in vec2 vUV; uniform sampler2D uT; out vec4 o;
+void main(){ o=texture(uT,vUV); }`);
+    const toneP=prog(`#version 300 es
+in vec2 aC; out vec2 uv; void main(){ uv=aC; gl_Position=vec4(aC.x*2.-1.,1.-aC.y*2.,0.,1.); }`,
+`#version 300 es
+precision mediump float; in vec2 uv; uniform sampler2D uVid,uMask; uniform vec4 uCrop; uniform float uBase,uRev; out vec4 o;
+void main(){
+  vec2 vc=vec2(uCrop.x+(1.-uv.x)*uCrop.z,uCrop.y+uv.y*uCrop.w);   // mirrored camera slice
+  float L=dot(texture(uVid,vc).rgb,vec3(.299,.587,.114));
+  float t=clamp((.86-L)/.62,0.,1.); t=floor(t*4.+.5)/4.;           // posterise: 5 tones
+  float s=uBase+min(1.,texture(uMask,uv).r*4.*1.8)*uRev;            // only near fingertips
+  float a=min(.36,t*s); o=vec4(vec3(32.,174.,229.)/255.*a,a); }`);
+    const quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0,1,0,0,1,1,1]),gl.STATIC_DRAW);
+    const inst=gl.createBuffer(), instData=new Float32Array(N*4);
+    gl.bindBuffer(gl.ARRAY_BUFFER,inst); gl.bufferData(gl.ARRAY_BUFFER,instData.byteLength,gl.DYNAMIC_DRAW);
+    const fishVAO=gl.createVertexArray(); gl.bindVertexArray(fishVAO);
+    let loc=gl.getAttribLocation(fishP,"aC"); gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+    loc=gl.getAttribLocation(fishP,"aI"); gl.bindBuffer(gl.ARRAY_BUFFER,inst); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,4,gl.FLOAT,false,0,0); gl.vertexAttribDivisor(loc,1);
+    const toneVAO=gl.createVertexArray(); gl.bindVertexArray(toneVAO);
+    loc=gl.getAttribLocation(toneP,"aC"); gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+    gl.bindVertexArray(null);
+    const tex=(filt)=>{const x=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,x);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,filt);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);return x};
+    G={fishP,toneP,fishVAO,toneVAO,inst,instData,spriteT:tex(gl.LINEAR),vidT:tex(gl.LINEAR),maskT:tex(gl.LINEAR),mask8:null,spriteU:null,
+      u:{fV:gl.getUniformLocation(fishP,"uV"),fS:gl.getUniformLocation(fishP,"uS"),fT:gl.getUniformLocation(fishP,"uT"),
+         tVid:gl.getUniformLocation(toneP,"uVid"),tMask:gl.getUniformLocation(toneP,"uMask"),tCrop:gl.getUniformLocation(toneP,"uCrop"),
+         tBase:gl.getUniformLocation(toneP,"uBase"),tRev:gl.getUniformLocation(toneP,"uRev")}};
+  }catch(e){ console.warn("WebGL2 setup failed, using 2D canvas",e); gl=null; G=null }
+}
+// a canvas holds only one kind of context: if WebGL failed after being created, swap in a fresh canvas for 2D
+let ctx=null;
+if(!gl){
+  ctx=cv.getContext("2d");
+  if(!ctx){const n=document.createElement("canvas");n.id="c";cv.replaceWith(n);cv=n;ctx=cv.getContext("2d")}
+}
+// fish sprite → GPU texture once, at a fixed high resolution (mipmapped for small sizes)
+function uploadSprite(){
+  makeSprite(ppu);   // same pixel density as the 2D path → same stroke weight
+  gl.bindTexture(gl.TEXTURE_2D,G.spriteT);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,sprite);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+  G.spriteU=[sprite.width/SR,sprite.height/SR,SOX/SR,SOY/SR];
+}
+
 const dbg=document.getElementById("dbg"),dctx=dbg.getContext("2d");
 let ppu=1,dpr=1,maxDpr=/low/i.test(location.search+location.hash)?1:2;
 function layout(){
@@ -81,7 +145,9 @@ function layout(){
   if(w>vw-m*2){w=vw-m*2;h=w*Math.SQRT2}
   poster.style.width=w+"px"; poster.style.height=h+"px";
   cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
-  ppu=cv.height/H; makeSprite(ppu);
+  ov.width=cv.width; ov.height=cv.height;
+  ppu=cv.height/H;
+  if(gl){ uploadSprite(); gl.viewport(0,0,cv.width,cv.height) } else makeSprite(ppu);
 }
 addEventListener("resize",layout); layout();
 
@@ -175,7 +241,7 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),vis:null,fs:null,
   async swap(){ if(this.switching)return; this.switching=true;
     try{await this.make(this.delegate==="GPU"?"CPU":"GPU")}catch(e){} this.switching=false },
   update(now,dt){
-    if(this.switching||video.readyState<2||video.currentTime===this.lastVT||now-this.lastDet<45){this.emit(dt,false);return}
+    if(this.switching||video.readyState<2||video.currentTime===this.lastVT||now-this.lastDet<Math.max(45,this.ms*2.5)){this.emit(dt,false);return}
     this.lastVT=video.currentTime; this.lastDet=now;
     const vw0=video.videoWidth,vh0=video.videoHeight;
     if(dc.width!==DET_W){dc.width=DET_W;dc.height=Math.round(DET_W*vh0/vw0)}
@@ -308,7 +374,6 @@ function stepInner(now){
   // field: decay, sources, blur, gradient
   const dec=Math.exp(-dt*3.2);
   for(let i=0;i<GN;i++)F[i]*=dec;
-  readCam();
   // precise point "hands": the pointer and every tracked body joint
   agents.length=0;
   if(false&&ptr&&now-ptr.t<4000){   // mouse/touch disabled: fingertips only
@@ -379,6 +444,60 @@ function stepInner(now){
   }
 
   // draw
+  if(gl)drawGL(); else draw2D();
+
+  if(dbg.classList.contains("on")){
+    octx.setTransform(1,0,0,1,0,0); octx.clearRect(0,0,ov.width,ov.height); ovDirty=true;
+    const p=dimg.data;
+    for(let i=0;i<GN;i++){const v=Math.min(255,Fb[i]*220);p[i*4]=255;p[i*4+1]=255-v;p[i*4+2]=255-v*.6;p[i*4+3]=255}
+    dctx.putImageData(dimg,0,0);
+    octx.setTransform(1,0,0,1,0,0); octx.strokeStyle="#e5203a"; octx.lineWidth=1.5*dpr;
+    for(const A of agents){octx.beginPath();octx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);octx.stroke()}
+    // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
+    if(!camOn){octx.fillStyle="#000";octx.font=(13*dpr)+"px system-ui";octx.fillText("v1119-gl · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
+    if(camOn&&video.videoWidth){
+      const vw=video.videoWidth,vh=video.videoHeight,tw=ov.width*.42,th=tw*vh/vw,ox=ov.width-tw-10*dpr,oy=10*dpr;
+      octx.save();octx.translate(ox+tw,oy);octx.scale(-1,1);octx.globalAlpha=.85;octx.drawImage(video,0,0,tw,th);octx.globalAlpha=1;
+      const [sx,sy,sw,sh]=camRect(vw,vh),k=tw/vw;
+      octx.strokeStyle="#20aee5";octx.lineWidth=2*dpr;octx.strokeRect(sx*k,sy*k,sw*k,sh*k);
+      octx.fillStyle="#e5203a";
+      for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;octx.beginPath();octx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);octx.fill()}
+      octx.restore();
+      octx.fillStyle="#000";octx.font=(11*dpr)+"px system-ui";octx.textAlign="right";
+      octx.fillText(`v1119-gl · ${gl?"WebGL":"2D"} · ${Math.round(fps)}fps · 추적 ${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);octx.textAlign="left";
+    }
+  } else if(ovDirty){ octx.clearRect(0,0,ov.width,ov.height); ovDirty=false }
+}
+let ovDirty=false;
+function drawGL(){
+  gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+  // fingertips printed in the poster ink — the shader does what the old per-pixel loop did
+  if(camOn&&vm>0&&video.readyState>=2&&video.videoWidth){
+    const vw=video.videoWidth,vh=video.videoHeight,[sx,sy,sw,sh]=camRect(vw,vh);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,G.vidT);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video);
+    if(!G.mask8)G.mask8=new Uint8Array(GN);
+    for(let i=0;i<GN;i++)G.mask8[i]=Math.min(255,RV[i]*63.75);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,G.maskT);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,GW,GH,0,gl.RED,gl.UNSIGNED_BYTE,G.mask8);
+    gl.useProgram(G.toneP); gl.bindVertexArray(G.toneVAO);
+    gl.uniform1i(G.u.tVid,0); gl.uniform1i(G.u.tMask,1);
+    gl.uniform4f(G.u.tCrop,sx/vw,sy/vh,sw/vw,sh/vh);
+    gl.uniform1f(G.u.tBase,vm===2?0.12:0); gl.uniform1f(G.u.tRev,0.38);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  }
+  const D=G.instData;
+  for(let i=0,j=0;i<N;i++,j+=4){D[j]=px[i];D[j+1]=py[i];D[j+2]=an[i];D[j+3]=hs[i]}
+  gl.bindBuffer(gl.ARRAY_BUFFER,G.inst); gl.bufferSubData(gl.ARRAY_BUFFER,0,D);
+  gl.useProgram(G.fishP); gl.bindVertexArray(G.fishVAO);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,G.spriteT); gl.uniform1i(G.u.fT,0);
+  gl.uniform2f(G.u.fV,W,H); gl.uniform4f(G.u.fS,G.spriteU[0],G.spriteU[1],G.spriteU[2],G.spriteU[3]);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,N);
+  gl.bindVertexArray(null);
+}
+function draw2D(){
   ctx.setTransform(1,0,0,1,0,0);
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,cv.width,cv.height);
   // live mirror of the viewer, same crop as the motion grid so body and fish line up
@@ -420,26 +539,6 @@ function stepInner(now){
     ctx.drawImage(sprite,-SOX,-SOY);
   }
 
-  if(dbg.classList.contains("on")){
-    const p=dimg.data;
-    for(let i=0;i<GN;i++){const v=Math.min(255,Fb[i]*220);p[i*4]=255;p[i*4+1]=255-v;p[i*4+2]=255-v*.6;p[i*4+3]=255}
-    dctx.putImageData(dimg,0,0);
-    ctx.setTransform(1,0,0,1,0,0); ctx.strokeStyle="#e5203a"; ctx.lineWidth=1.5*dpr;
-    for(const A of agents){ctx.beginPath();ctx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);ctx.stroke()}
-    // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
-    if(!camOn){ctx.fillStyle="#000";ctx.font=(13*dpr)+"px system-ui";ctx.fillText("v1118-1820 · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
-    if(camOn&&video.videoWidth){
-      const vw=video.videoWidth,vh=video.videoHeight,tw=cv.width*.42,th=tw*vh/vw,ox=cv.width-tw-10*dpr,oy=10*dpr;
-      ctx.save();ctx.translate(ox+tw,oy);ctx.scale(-1,1);ctx.globalAlpha=.85;ctx.drawImage(video,0,0,tw,th);ctx.globalAlpha=1;
-      const [sx,sy,sw,sh]=camRect(vw,vh),k=tw/vw;
-      ctx.strokeStyle="#20aee5";ctx.lineWidth=2*dpr;ctx.strokeRect(sx*k,sy*k,sw*k,sh*k);
-      ctx.fillStyle="#e5203a";
-      for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;ctx.beginPath();ctx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);ctx.fill()}
-      ctx.restore();
-      ctx.fillStyle="#000";ctx.font=(11*dpr)+"px system-ui";ctx.textAlign="right";
-      ctx.fillText(`v1118-1820 · ${Math.round(fps)}fps · 추적 ${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);ctx.textAlign="left";
-    }
-  }
 }
 requestAnimationFrame(step);
 

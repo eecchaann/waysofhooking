@@ -4,6 +4,7 @@
 
 https://eecchaann.github.io/waysofhooking/
 
+- 렌더링: WebGL2 인스턴싱(물고기 1만 2천 마리를 한 번에), 미지원 시 2D 자동 전환 (강제: ?2d)
 - 구형 맥: 자동 저사양 모드, 손 추적 GPU/CPU 자동 전환 (강제: 주소 뒤 ?cpu, ?low)
 - 손끝 추적: MediaPipe Hands (엄지·검지·중지·약지·새끼 끝) — 각 지점이 마우스 커서처럼 작동
 - 소리: 손짓이 빠를수록 보글보글 물방울 소리가 많아짐 (Web Audio로 실시간 합성)
