@@ -211,8 +211,14 @@ function readCam(){
 
 /* ---------- body tracking (MediaPipe Pose) → precise joint "cursors" ---------- */
 const agents=[];
-const MP="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-const MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+// hand-tracking files are hosted with the site itself, so venue Wi-Fi only needs to reach github.io.
+// A copy opened from disk (file://) has no such folder and uses the public CDNs instead.
+const CDN_MP="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const CDN_MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const SELF=/^https?:$/.test(location.protocol)&&!/cdn/i.test(location.search);
+const BASE=location.href.split(/[?#]/)[0].replace(/[^/]*$/,"");
+let MP=SELF?new URL("mp",BASE).href:CDN_MP;
+let MODEL=SELF?new URL("models/hand_landmarker.task",BASE).href:CDN_MODEL;
 // landmark index → [radius (poster units), resting presence]
 // fingertips only (MediaPipe Hands): thumb, index, middle, ring, pinky → [radius, resting presence]
 const JOINTS={4:[8,.14],8:[10,.20],12:[8,.14],16:[7,.10],20:[7,.10]};
@@ -287,7 +293,10 @@ const pose={on:false,people:0,lm:null,lastVT:-1,st:new Map(),vis:null,fs:null,
       this.fs=await this.vis.FilesetResolver.forVisionTasks(MP+"/wasm");
       try{await this.make(this.delegate)}catch(e){await this.make(this.delegate==="GPU"?"CPU":"GPU")}
       this.on=true; this.mode="page"; say("손끝 추적 켜짐 — 손가락 끝에만 반응합니다",3500);
-    }catch(e){this.loading=false;this.failed=true;console.warn("pose unavailable",e); say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
+    }catch(e){
+      console.warn("pose unavailable from",MP,e);
+      if(MP!==CDN_MP){ MP=CDN_MP; MODEL=CDN_MODEL; this.vis=null; this.fs=null; return this.initMain() }   // retry once from the CDNs
+      this.loading=false;this.failed=true; say("손끝 추적을 불러오지 못했습니다 — 인터넷 연결을 확인하고 새로고침해 주세요",0)}
   },
   // old GPUs (e.g. 2017 Intel Macs) can fail silently: if detection keeps erroring, or finds
   // nothing for a long stretch before ever seeing a hand, try the other delegate.
@@ -524,7 +533,7 @@ function stepInner(now){
     octx.setTransform(1,0,0,1,0,0); octx.strokeStyle="#e5203a"; octx.lineWidth=1.5*dpr;
     for(const A of agents){octx.beginPath();octx.arc(A.x*ppu,A.y*ppu,A.r*ppu,0,6.283);octx.stroke()}
     // camera thumbnail (mirrored) with the slice that maps to the poster and every hand point
-    if(!camOn){octx.fillStyle="#000";octx.font=(13*dpr)+"px system-ui";octx.fillText("v1119-gl2 · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
+    if(!camOn){octx.fillStyle="#000";octx.font=(13*dpr)+"px system-ui";octx.fillText("v1120-local · 카메라 꺼짐/권한 없음 — 브라우저 주소창 옆 카메라 아이콘에서 허용",10*dpr,22*dpr)}
     if(camOn&&video.videoWidth){
       const vw=video.videoWidth,vh=video.videoHeight,tw=ov.width*.42,th=tw*vh/vw,ox=ov.width-tw-10*dpr,oy=10*dpr;
       octx.save();octx.translate(ox+tw,oy);octx.scale(-1,1);octx.globalAlpha=.85;octx.drawImage(video,0,0,tw,th);octx.globalAlpha=1;
@@ -534,7 +543,7 @@ function stepInner(now){
       for(const L of (pose.raw||[]))for(let j=0;j<L.length;j++){const r=(j%4===0&&j)?3.5:1.8;octx.beginPath();octx.arc(L[j].x*tw,L[j].y*th,r*dpr,0,6.283);octx.fill()}
       octx.restore();
       octx.fillStyle="#000";octx.font=(11*dpr)+"px system-ui";octx.textAlign="right";
-      octx.fillText(`v1119-gl2 · ${gl?"WebGL":"2D"} · ${Math.round(fps)}fps · 추적 ${pose.mode||"-"}/${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);octx.textAlign="left";
+      octx.fillText(`v1120-local · ${gl?"WebGL":"2D"} · ${Math.round(fps)}fps · 추적 ${pose.mode||"-"}/${pose.delegate} ${Math.round(pose.ms)}ms · 카메라 ${vw}×${vh} · 손 추적 ${pose.on?"켜짐":pose.failed?"실패":(pose.loading?"불러오는 중":"꺼짐")} · 인식된 손 ${(pose.raw||[]).length}개`,ox+tw,oy+th+16*dpr);octx.textAlign="left";
     }
   } else if(ovDirty){ octx.clearRect(0,0,ov.width,ov.height); ovDirty=false }
 }
